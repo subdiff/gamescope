@@ -24,6 +24,7 @@ struct wlserver_t wlserver;
 Display *g_XWLDpy;
 
 static bool run = true;
+static bool compmgr_ready = false;
 
 void sig_handler(int signal)
 {
@@ -85,6 +86,7 @@ const struct wlr_surface_role xwayland_surface_role = {
 static void xwayland_ready(struct wl_listener *listener, void *data)
 {
 	startSteamCompMgr();
+	compmgr_ready = true;
 }
 
 struct wl_listener xwayland_ready_listener = { .notify = xwayland_ready };
@@ -224,6 +226,11 @@ int wlserver_run(void)
 		}
 
 		wlserver_unlock();
+
+		if (compmgr_ready)
+		{
+			steamcompmgr_loop();
+		}
 	}
 
 	// We need to shutdown Xwayland before disconnecting all clients, otherwise

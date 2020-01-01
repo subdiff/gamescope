@@ -81,10 +81,9 @@ void steamCompMgrThreadRun(void)
 
 void startSteamCompMgr(void)
 {
-	std::thread steamCompMgrThread( steamCompMgrThreadRun );
-	steamCompMgrThread.detach();
-	
-	return;
+	steamCompMgrThreadRun();
+//	std::thread steamCompMgrThread( steamCompMgrThreadRun );
+//	steamCompMgrThread.detach();
 }
 
 void initOutput(void)

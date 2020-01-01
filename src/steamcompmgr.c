@@ -1601,11 +1601,11 @@ void check_new_wayland_res(void)
 	}
 }
 
+static Display *dpy = NULL;
+
 int
 steamcompmgr_main (int argc, char **argv)
 {
-	Display	   *dpy;
-	XEvent	    ev;
 	Window	    root_return, parent_return;
 	Window	    *children;
 	unsigned int    nchildren;
@@ -1758,311 +1758,316 @@ steamcompmgr_main (int argc, char **argv)
 	globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
 	
 	determine_and_apply_focus(dpy);
-	
-	for (;;)
-	{
-		focusDirty = False;
-		
-		do {
-			XNextEvent (dpy, &ev);
-			if ((ev.type & 0x7f) != KeymapNotify)
-				discard_ignore (dpy, ev.xany.serial);
-			if (debugEvents)
+
+	return 1;
+}
+
+void
+steamcompmgr_loop()
+{
+	XEvent ev;
+
+	focusDirty = False;
+
+	do {
+		XNextEvent (dpy, &ev);
+		if ((ev.type & 0x7f) != KeymapNotify)
+			discard_ignore (dpy, ev.xany.serial);
+		if (debugEvents)
+		{
+			printf ("event %d\n", ev.type);
+		}
+		switch (ev.type) {
+			case CreateNotify:
+				if (ev.xcreatewindow.parent == root)
+					add_win (dpy, ev.xcreatewindow.window, 0, ev.xcreatewindow.serial);
+				break;
+			case ConfigureNotify:
+				configure_win (dpy, &ev.xconfigure);
+				break;
+			case DestroyNotify:
 			{
-				printf ("event %d\n", ev.type);
+				win * w = find_win(dpy, ev.xdestroywindow.window);
+
+				if (w && w->id == ev.xdestroywindow.window)
+					destroy_win (dpy, ev.xdestroywindow.window, True, True);
+				break;
 			}
-			switch (ev.type) {
-				case CreateNotify:
-					if (ev.xcreatewindow.parent == root)
-						add_win (dpy, ev.xcreatewindow.window, 0, ev.xcreatewindow.serial);
-					break;
-				case ConfigureNotify:
-					configure_win (dpy, &ev.xconfigure);
-					break;
-				case DestroyNotify:
+			case MapNotify:
+			{
+				win * w = find_win(dpy, ev.xmap.window);
+
+				if (w && w->id == ev.xmap.window)
+					map_win (dpy, ev.xmap.window, ev.xmap.serial);
+				break;
+			}
+			case UnmapNotify:
+			{
+				win * w = find_win(dpy, ev.xunmap.window);
+
+				if (w && w->id == ev.xunmap.window)
+					unmap_win (dpy, ev.xunmap.window, True);
+				break;
+			}
+			case ReparentNotify:
+				if (ev.xreparent.parent == root)
+					add_win (dpy, ev.xreparent.window, 0, ev.xreparent.serial);
+				else
 				{
-					win * w = find_win(dpy, ev.xdestroywindow.window);
-					
-					if (w && w->id == ev.xdestroywindow.window)
-						destroy_win (dpy, ev.xdestroywindow.window, True, True);
-					break;
-				}
-				case MapNotify:
-				{
-					win * w = find_win(dpy, ev.xmap.window);
-					
-					if (w && w->id == ev.xmap.window)
-						map_win (dpy, ev.xmap.window, ev.xmap.serial);
-					break;
-				}
-				case UnmapNotify:
-				{
-					win * w = find_win(dpy, ev.xunmap.window);
-					
-					if (w && w->id == ev.xunmap.window)
-						unmap_win (dpy, ev.xunmap.window, True);
-					break;
-				}
-				case ReparentNotify:
-					if (ev.xreparent.parent == root)
-						add_win (dpy, ev.xreparent.window, 0, ev.xreparent.serial);
+					win * w = find_win(dpy, ev.xreparent.window);
+
+					if (w && w->id == ev.xreparent.window)
+					{
+						destroy_win (dpy, ev.xreparent.window, False, True);
+					}
 					else
 					{
-						win * w = find_win(dpy, ev.xreparent.window);
-						
-						if (w && w->id == ev.xreparent.window)
-						{
-							destroy_win (dpy, ev.xreparent.window, False, True);
-						}
-						else
-						{
-							// If something got reparented _to_ a toplevel window,
-							// go check for the fullscreen workaround again.
-							w = find_win(dpy, ev.xreparent.parent);
-							if (w)
-							{
-								get_size_hints(dpy, w);
-								focusDirty = True;
-							}
-						}
-					}
-					break;
-				case CirculateNotify:
-					circulate_win(dpy, &ev.xcirculate);
-					break;
-				case MapRequest:
-					map_request(dpy, &ev.xmaprequest);
-					break;
-				case ConfigureRequest:
-					configure_request(dpy, &ev.xconfigurerequest);
-					break;
-				case CirculateRequest:
-					circulate_request(dpy, &ev.xcirculaterequest);
-					break;
-				case Expose:
-					break;
-				case PropertyNotify:
-					/* check if Trans property was changed */
-					if (ev.xproperty.atom == opacityAtom)
-					{
-						/* reset mode and redraw window */
-						win * w = find_win(dpy, ev.xproperty.window);
-						if (w && w->isOverlay)
-						{
-							unsigned int newOpacity = get_prop(dpy, w->id, opacityAtom, TRANSLUCENT);
-							
-							if (newOpacity != w->opacity)
-							{
-								w->damaged = 1;
-								w->opacity = newOpacity;
-							}
-							
-							if (w->isOverlay)
-							{
-								set_win_hidden(dpy, w, w->opacity == TRANSLUCENT);
-							}
-							
-							unsigned int maxOpacity = 0;
-							
-							for (w = list; w; w = w->next)
-							{
-								if (w->isOverlay)
-								{
-									if (w->a.width == 1920 && w->opacity >= maxOpacity)
-									{
-										currentOverlayWindow = w->id;
-										maxOpacity = w->opacity;
-									}
-								}
-							}
-						}
-					}
-					if (ev.xproperty.atom == steamAtom)
-					{
-						win * w = find_win(dpy, ev.xproperty.window);
-						if (w)
-						{
-							w->isSteam = get_prop(dpy, w->id, steamAtom, 0);
-							focusDirty = True;
-						}
-					}
-					if (ev.xproperty.atom == gameAtom)
-					{
-						win * w = find_win(dpy, ev.xproperty.window);
-						if (w)
-						{
-							w->gameID = get_prop(dpy, w->id, gameAtom, 0);
-							focusDirty = True;
-						}
-					}
-					if (ev.xproperty.atom == overlayAtom)
-					{
-						win * w = find_win(dpy, ev.xproperty.window);
-						if (w)
-						{
-							w->isOverlay = get_prop(dpy, w->id, overlayAtom, 0);
-							focusDirty = True;
-						}
-					}
-					if (ev.xproperty.atom == sizeHintsAtom)
-					{
-						win * w = find_win(dpy, ev.xproperty.window);
+						// If something got reparented _to_ a toplevel window,
+						// go check for the fullscreen workaround again.
+						w = find_win(dpy, ev.xreparent.parent);
 						if (w)
 						{
 							get_size_hints(dpy, w);
 							focusDirty = True;
 						}
 					}
-					if (ev.xproperty.atom == gamesRunningAtom)
+				}
+				break;
+			case CirculateNotify:
+				circulate_win(dpy, &ev.xcirculate);
+				break;
+			case MapRequest:
+				map_request(dpy, &ev.xmaprequest);
+				break;
+			case ConfigureRequest:
+				configure_request(dpy, &ev.xconfigurerequest);
+				break;
+			case CirculateRequest:
+				circulate_request(dpy, &ev.xcirculaterequest);
+				break;
+			case Expose:
+				break;
+			case PropertyNotify:
+				/* check if Trans property was changed */
+				if (ev.xproperty.atom == opacityAtom)
+				{
+					/* reset mode and redraw window */
+					win * w = find_win(dpy, ev.xproperty.window);
+					if (w && w->isOverlay)
 					{
-						gamesRunningCount = get_prop(dpy, root, gamesRunningAtom, 0);
-						
-						focusDirty = True;
-					}
-					if (ev.xproperty.atom == screenScaleAtom)
-					{
-						overscanScaleRatio = get_prop(dpy, root, screenScaleAtom, 0xFFFFFFFF) / (double)0xFFFFFFFF;
-						
-						globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
-						
-						win *w;
-						
-						if ((w = find_win(dpy, currentFocusWindow)))
-							w->damaged = 1;
-						
-						focusDirty = True;
-					}
-					if (ev.xproperty.atom == screenZoomAtom)
-					{
-						zoomScaleRatio = get_prop(dpy, root, screenZoomAtom, 0xFFFF) / (double)0xFFFF;
-						
-						globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
-						
-						win *w;
-						
-						if ((w = find_win(dpy, currentFocusWindow)))
-							w->damaged = 1;
-						
-						focusDirty = True;
-					}
-					break;
-					case ClientMessage:
-					{
-						win * w = find_win(dpy, ev.xclient.window);
-						if (w)
+						unsigned int newOpacity = get_prop(dpy, w->id, opacityAtom, TRANSLUCENT);
+
+						if (newOpacity != w->opacity)
 						{
-							if (ev.xclient.message_type == WLSurfaceIDAtom)
+							w->damaged = 1;
+							w->opacity = newOpacity;
+						}
+
+						if (w->isOverlay)
+						{
+							set_win_hidden(dpy, w, w->opacity == TRANSLUCENT);
+						}
+
+						unsigned int maxOpacity = 0;
+
+						for (w = list; w; w = w->next)
+						{
+							if (w->isOverlay)
 							{
-								handle_wl_surface_id(dpy, w, ev.xclient.data.l[0]);
-							}
-							else
-							{
-								if (ev.xclient.data.l[1] == fullscreenAtom)
+								if (w->a.width == 1920 && w->opacity >= maxOpacity)
 								{
-									w->isFullscreen = ev.xclient.data.l[0];
-									
-									focusDirty = True;
+									currentOverlayWindow = w->id;
+									maxOpacity = w->opacity;
 								}
 							}
 						}
-						break;
 					}
-					case LeaveNotify:
-						if (ev.xcrossing.window == currentFocusWindow)
-						{
-							// This shouldn't happen due to our pointer barriers,
-							// but there is a known X server bug; warp to last good
-							// position.
-							XWarpPointer(dpy, None, currentFocusWindow, 0, 0, 0, 0,
-										 cursorX, cursorY);
-						}
-						break;
-					case MotionNotify:
+				}
+				if (ev.xproperty.atom == steamAtom)
+				{
+					win * w = find_win(dpy, ev.xproperty.window);
+					if (w)
 					{
-						win * w = find_win(dpy, ev.xmotion.window);
-						if (w && w->id == currentFocusWindow)
-						{
-							handle_mouse_movement( dpy, ev.xmotion.x, ev.xmotion.y );
-						}
-						break;
+						w->isSteam = get_prop(dpy, w->id, steamAtom, 0);
+						focusDirty = True;
 					}
-					default:
-						if (ev.type == damage_event + XDamageNotify)
-						{
-							damage_win (dpy, (XDamageNotifyEvent *) &ev);
-						}
-						else if (ev.type == xfixes_event + XFixesCursorNotify)
-						{
-							cursorImageDirty = True;
-						}
-						break;
-			}
-		} while (QLength (dpy));
-		
-		if (focusDirty == True)
-			determine_and_apply_focus(dpy);
-		
-		if (doRender)
-		{
-			struct timespec now;
-			clock_gettime(CLOCK_MONOTONIC, &now);
+				}
+				if (ev.xproperty.atom == gameAtom)
+				{
+					win * w = find_win(dpy, ev.xproperty.window);
+					if (w)
+					{
+						w->gameID = get_prop(dpy, w->id, gameAtom, 0);
+						focusDirty = True;
+					}
+				}
+				if (ev.xproperty.atom == overlayAtom)
+				{
+					win * w = find_win(dpy, ev.xproperty.window);
+					if (w)
+					{
+						w->isOverlay = get_prop(dpy, w->id, overlayAtom, 0);
+						focusDirty = True;
+					}
+				}
+				if (ev.xproperty.atom == sizeHintsAtom)
+				{
+					win * w = find_win(dpy, ev.xproperty.window);
+					if (w)
+					{
+						get_size_hints(dpy, w);
+						focusDirty = True;
+					}
+				}
+				if (ev.xproperty.atom == gamesRunningAtom)
+				{
+					gamesRunningCount = get_prop(dpy, root, gamesRunningAtom, 0);
 
-			check_new_wayland_res();
-			
-			paint_all(dpy);
-			
-			// If we're in the middle of a fade, pump an event into the loop to
-			// make sure we keep pushing frames even if the app isn't updating.
-			if (fadeOutWindow.id)
-				XSendEvent(dpy, ourWindow, True, SubstructureRedirectMask, &nudgeEvent);
-			
-			Window window_returned, child;
-			int root_x, root_y;
-			int win_x, win_y;
-			unsigned int mask_return;
-			
-			XQueryPointer(dpy, DefaultRootWindow(dpy), &window_returned,
-						  &child, &root_x, &root_y, &win_x, &win_y,
-						&mask_return);
-			
-			if ( mask_return & ( Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask ) )
+					focusDirty = True;
+				}
+				if (ev.xproperty.atom == screenScaleAtom)
+				{
+					overscanScaleRatio = get_prop(dpy, root, screenScaleAtom, 0xFFFFFFFF) / (double)0xFFFFFFFF;
+
+					globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
+
+					win *w;
+
+					if ((w = find_win(dpy, currentFocusWindow)))
+						w->damaged = 1;
+
+					focusDirty = True;
+				}
+				if (ev.xproperty.atom == screenZoomAtom)
+				{
+					zoomScaleRatio = get_prop(dpy, root, screenZoomAtom, 0xFFFF) / (double)0xFFFF;
+
+					globalScaleRatio = overscanScaleRatio * zoomScaleRatio;
+
+					win *w;
+
+					if ((w = find_win(dpy, currentFocusWindow)))
+						w->damaged = 1;
+
+					focusDirty = True;
+				}
+				break;
+				case ClientMessage:
+				{
+					win * w = find_win(dpy, ev.xclient.window);
+					if (w)
+					{
+						if (ev.xclient.message_type == WLSurfaceIDAtom)
+						{
+							handle_wl_surface_id(dpy, w, ev.xclient.data.l[0]);
+						}
+						else
+						{
+							if (ev.xclient.data.l[1] == fullscreenAtom)
+							{
+								w->isFullscreen = ev.xclient.data.l[0];
+
+								focusDirty = True;
+							}
+						}
+					}
+					break;
+				}
+				case LeaveNotify:
+					if (ev.xcrossing.window == currentFocusWindow)
+					{
+						// This shouldn't happen due to our pointer barriers,
+						// but there is a known X server bug; warp to last good
+						// position.
+						XWarpPointer(dpy, None, currentFocusWindow, 0, 0, 0, 0,
+									 cursorX, cursorY);
+					}
+					break;
+				case MotionNotify:
+				{
+					win * w = find_win(dpy, ev.xmotion.window);
+					if (w && w->id == currentFocusWindow)
+					{
+						handle_mouse_movement( dpy, ev.xmotion.x, ev.xmotion.y );
+					}
+					break;
+				}
+				default:
+					if (ev.type == damage_event + XDamageNotify)
+					{
+						damage_win (dpy, (XDamageNotifyEvent *) &ev);
+					}
+					else if (ev.type == xfixes_event + XFixesCursorNotify)
+					{
+						cursorImageDirty = True;
+					}
+					break;
+		}
+	} while (QLength (dpy));
+
+	if (focusDirty == True)
+		determine_and_apply_focus(dpy);
+
+	if (doRender)
+	{
+		struct timespec now;
+		clock_gettime(CLOCK_MONOTONIC, &now);
+
+		check_new_wayland_res();
+
+		paint_all(dpy);
+
+		// If we're in the middle of a fade, pump an event into the loop to
+		// make sure we keep pushing frames even if the app isn't updating.
+		if (fadeOutWindow.id)
+			XSendEvent(dpy, ourWindow, True, SubstructureRedirectMask, &nudgeEvent);
+
+		Window window_returned, child;
+		int root_x, root_y;
+		int win_x, win_y;
+		unsigned int mask_return;
+
+		XQueryPointer(dpy, DefaultRootWindow(dpy), &window_returned,
+					  &child, &root_x, &root_y, &win_x, &win_y,
+					&mask_return);
+
+		if ( mask_return & ( Button1Mask | Button2Mask | Button3Mask | Button4Mask | Button5Mask ) )
+		{
+			hideCursorForMovement = False;
+			lastCursorMovedTime = get_time_in_milliseconds();
+		}
+
+		if (!hideCursorForMovement &&
+			(get_time_in_milliseconds() - lastCursorMovedTime) > CURSOR_HIDE_TIME)
+		{
+			hideCursorForMovement = True;
+
+			// We're hiding the cursor, force redraw by marking focused window damaged
+			win *w = find_win(dpy, currentFocusWindow);
+
+			// Rearm warp count
+			if (w)
 			{
-				hideCursorForMovement = False;
-				lastCursorMovedTime = get_time_in_milliseconds();
+				w->mouseMoved = 0;
 			}
-			
-			if (!hideCursorForMovement &&
-				(get_time_in_milliseconds() - lastCursorMovedTime) > CURSOR_HIDE_TIME)
+
+			if (w && gameFocused)
 			{
-				hideCursorForMovement = True;
-				
-				// We're hiding the cursor, force redraw by marking focused window damaged
-				win *w = find_win(dpy, currentFocusWindow);
-				
-				// Rearm warp count
-				if (w)
-				{
-					w->mouseMoved = 0;
-				}
-				
-				if (w && gameFocused)
-				{
-					w->damaged = 1;
-				}
+				w->damaged = 1;
 			}
-			
-			// Send frame done event to all Wayland surfaces
-			for (win *w = list; w; w = w->next)
+		}
+
+		// Send frame done event to all Wayland surfaces
+		for (win *w = list; w; w = w->next)
+		{
+			if ( w->wlrsurface && w->committed == True )
 			{
-				if ( w->wlrsurface && w->committed == True )
-				{
-					// Acknowledge commit once.
-					wlserver_lock();
-					wlr_surface_send_frame_done(w->wlrsurface, &now);
-					wlserver_unlock();
-					
-					w->committed = False;
-				}
+				// Acknowledge commit once.
+				wlserver_lock();
+				wlr_surface_send_frame_done(w->wlrsurface, &now);
+				wlserver_unlock();
+
+				w->committed = False;
 			}
 		}
 	}
