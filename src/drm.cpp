@@ -359,6 +359,19 @@ int init_drm(struct drm_t *drm, const char *device, const char *mode_str, unsign
 		printf("could not find mode!\n");
 		return -1;
 	}
+
+	/* find preferred cursor width, height */
+	drm->cursor_width = 64;
+	drm->cursor_height = 64;
+	uint64_t cap;
+	if (drmGetCap(drm->fd, DRM_CAP_CURSOR_WIDTH, &cap) == 0) {
+		printf("Got drm cursor width: %lu\n", cap);
+		drm->cursor_width = cap;
+	}
+	if (drmGetCap(drm->fd, DRM_CAP_CURSOR_HEIGHT, &cap) == 0) {
+		printf("Got drm cursor height: %lu\n", cap);
+		drm->cursor_height = cap;
+	}
 	
 	/* find encoder: */
 	for (i = 0; i < resources->count_encoders; i++) {

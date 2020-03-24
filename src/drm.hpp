@@ -56,6 +56,9 @@ struct drm_t {
 	
 	drmModeAtomicReq *req;
 	uint32_t flags;
+
+	uint64_t cursor_width;
+	uint64_t cursor_height;
 	
 	struct liftoff_device *lo_device;
 	struct liftoff_output *lo_output;
