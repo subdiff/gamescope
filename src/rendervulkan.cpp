@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include "rendervulkan.hpp"
 #include "main.hpp"
@@ -407,6 +408,143 @@ bool CVulkanTexture::BInit( uint32_t width, uint32_t height, VkFormat format, bo
 	return true;
 }
 
+// This is very similar to the CVulkanTexture::BInit. They are separate for now to have better
+// control ober the cursor when debugging and developing. That's because at the moment the dmabuf
+// path does not work with the cursor. Only dumb buffers seem to work.
+// But when this is solved at some point the cursor BInit should be merged back.
+bool CVulkanCursorTexture::BInit(uint32_t width, uint32_t height, bool useDmabufForFlips)
+{
+	VkResult res = VK_ERROR_INITIALIZATION_FAILED;
+
+	VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+
+	VkMemoryPropertyFlags properties = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+	VkImageCreateInfo imageInfo = {};
+	imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+	imageInfo.imageType = VK_IMAGE_TYPE_2D;
+	imageInfo.extent.width = width;
+	imageInfo.extent.height = height;
+	imageInfo.extent.depth = 1;
+	imageInfo.mipLevels = 1;
+	imageInfo.arrayLayers = 1;
+	imageInfo.format = format;
+	imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+	imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+	imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+	if ( useDmabufForFlips == true )
+	{
+		wsi_image_create_info wsiImageCreateInfo = {};
+
+		// Either we're scanning out the image, or if we're importing them, they got
+		// allocated with scanout in mind by their original WSI.
+		wsiImageCreateInfo.sType = VK_STRUCTURE_TYPE_WSI_IMAGE_CREATE_INFO_MESA;
+		wsiImageCreateInfo.scanout = VK_TRUE;
+		wsiImageCreateInfo.pNext = imageInfo.pNext;
+
+		imageInfo.pNext = &wsiImageCreateInfo;
+	}
+
+	if (vkCreateImage(device, &imageInfo, nullptr, &m_vkImage) != VK_SUCCESS) {
+		return false;
+	}
+
+	VkMemoryRequirements memRequirements;
+	vkGetImageMemoryRequirements(device, m_vkImage, &memRequirements);
+
+	// Possible pNexts
+	VkExportMemoryAllocateInfo memory_export_info = {};
+
+	VkMemoryAllocateInfo allocInfo = {};
+	allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	allocInfo.allocationSize = memRequirements.size;
+	allocInfo.memoryTypeIndex = findMemoryType(properties, memRequirements.memoryTypeBits );
+
+	if ( useDmabufForFlips == true )
+	{
+		// We'll export it to DRM
+		memory_export_info.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
+		memory_export_info.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+		memory_export_info.pNext = allocInfo.pNext;
+
+		allocInfo.pNext = &memory_export_info;
+	}
+
+	if (vkAllocateMemory(device, &allocInfo, nullptr, &m_vkImageMemory) != VK_SUCCESS) {
+		return false;
+	}
+
+	res = vkBindImageMemory(device, m_vkImage, m_vkImageMemory, 0);
+
+	if ( res != VK_SUCCESS )
+		return false;
+
+	if ( useDmabufForFlips == true )
+	{
+		m_DMA.modifier = DRM_FORMAT_MOD_INVALID;
+		m_DMA.n_planes = 1;
+		m_DMA.width = width;
+		m_DMA.height = height;
+		m_DMA.format = DRM_FORMAT_ARGB8888;
+
+		const VkMemoryGetFdInfoKHR memory_get_fd_info = {
+			.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR,
+			.pNext = NULL,
+			.memory = m_vkImageMemory,
+			.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+		};
+		res = dyn_vkGetMemoryFdKHR(device, &memory_get_fd_info, &m_DMA.fd[0]);
+
+		if ( res != VK_SUCCESS )
+			return false;
+
+		const VkImageSubresource image_subresource = {
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.mipLevel = 0,
+			.arrayLayer = 0,
+		};
+		VkSubresourceLayout image_layout;
+		vkGetImageSubresourceLayout(device, m_vkImage, &image_subresource, &image_layout);
+
+		m_DMA.stride[0] = image_layout.rowPitch;
+
+		m_FBID = drm_fbid_from_dmabuf( &g_DRM, &m_DMA );
+
+		if ( m_FBID == 0 )
+			return false;
+	}
+
+	VkImageViewCreateInfo createInfo = {};
+	createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+	createInfo.image = m_vkImage;
+	createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+	createInfo.format = format;
+
+	// for VK_FORMAT_A8B8G8R8_UNORM_PACK32 --> DRM_FORMAT_ARGB8888
+	createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+	createInfo.components.r = VK_COMPONENT_SWIZZLE_B;
+	createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+	createInfo.components.b = VK_COMPONENT_SWIZZLE_R;
+
+	createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	createInfo.subresourceRange.baseMipLevel = 0;
+	createInfo.subresourceRange.levelCount = 1;
+	createInfo.subresourceRange.baseArrayLayer = 0;
+	createInfo.subresourceRange.layerCount = 1;
+
+	res = vkCreateImageView(device, &createInfo, nullptr, &m_vkImageView);
+	if ( res != VK_SUCCESS )
+		return false;
+
+	m_bInitialized = true;
+	m_bFlippable = useDmabufForFlips;
+
+	return true;
+}
+
 CVulkanTexture::~CVulkanTexture( void )
 {
 	if ( m_vkImageView != VK_NULL_HANDLE )
@@ -438,6 +576,12 @@ CVulkanTexture::~CVulkanTexture( void )
 	m_bInitialized = false;
 }
 
+CVulkanCursorTexture::~CVulkanCursorTexture( void )
+{
+	if (m_memory) {
+		munmap(m_memory, m_memorySize);
+	}
+}
 
 int init_device()
 {
@@ -1249,6 +1393,112 @@ VulkanTexture_t vulkan_create_texture_from_bits( uint32_t width, uint32_t height
 	
 	pTex->handle = ret;
 	
+	return ret;
+}
+
+VulkanTexture_t vulkan_create_cursor_texture(uint32_t width, uint32_t height, uint32_t *pixels,
+											 uint32_t *fbid)
+{
+	VulkanTexture_t ret = 0;
+
+	auto *pTex = new CVulkanCursorTexture();
+
+	if ( pTex->BInit( width, height, !BIsNested() && fbid == nullptr) == false )
+	{
+		delete pTex;
+		return ret;
+	}
+
+	// Create a dumb drm buffer for the cursor instead of a dmabuf based one.
+	if (!BIsNested() && fbid != nullptr)
+	{
+		struct drm_mode_create_dumb drmDumbCreateArgs;
+		memset(&drmDumbCreateArgs, 0, sizeof drmDumbCreateArgs);
+		drmDumbCreateArgs.height = height;
+		drmDumbCreateArgs.width = width;
+		drmDumbCreateArgs.bpp = 32;
+		drmDumbCreateArgs.flags = 0;
+
+		if (drmIoctl(g_DRM.fd, DRM_IOCTL_MODE_CREATE_DUMB, &drmDumbCreateArgs) != 0) {
+			fprintf (stderr, "Cursor DRM_IOCTL_MODE_CREATE_DUMB failed.\n");
+			return 0;
+		}
+
+//		fprintf (stderr, "vulkan_create_cursor_texture drm_mode_create_dumb "
+//						 "handle: %u size: %llu pitch: %u\n",
+//				 drmDumbCreateArgs.handle, drmDumbCreateArgs.size, drmDumbCreateArgs.pitch);
+
+		// In 4k page sizes.
+		pTex->m_memorySize = drmDumbCreateArgs.size;
+
+		uint32_t handles[4] = { drmDumbCreateArgs.handle };
+		uint32_t pitches[4] = { drmDumbCreateArgs.pitch };
+		uint32_t offsets[4] = { 0 };
+
+		if (drmModeAddFB2(g_DRM.fd, width, height, DRM_FORMAT_ARGB8888, handles, pitches, offsets,
+						  fbid, 0) != 0) {
+			fprintf (stderr, "drmModeAddFB failed with errno %d\n", errno);
+			return 0;
+		}
+
+		assert( g_DRM.map_fbid_inflightflips[ *fbid ].first == false );
+		g_DRM.map_fbid_inflightflips[ *fbid ].first = true;
+		g_DRM.map_fbid_inflightflips[ *fbid ].second = 0;
+
+		struct drm_mode_map_dumb drmDumbMapArgs;
+		memset(&drmDumbMapArgs, 0, sizeof drmDumbMapArgs);
+		drmDumbMapArgs.handle = drmDumbCreateArgs.handle;
+
+		if (drmIoctl(g_DRM.fd, DRM_IOCTL_MODE_MAP_DUMB, &drmDumbMapArgs) != 0) {
+			fprintf (stderr, "DRM_IOCTL_MODE_MAP_DUMB failed with errno %d\n", errno);
+			return 0;
+		}
+
+//		fprintf (stderr, "vulkan_create_cursor_texture drm_mode_map_dumb handle: %u "
+//						 "pad: %u offset: %llu\n",
+//						 drmDumbMapArgs.handle, drmDumbMapArgs.pad, drmDumbMapArgs.offset);
+
+		char *address = (char*)mmap(nullptr, drmDumbCreateArgs.size, PROT_WRITE, MAP_SHARED,
+									g_DRM.fd, drmDumbMapArgs.offset);
+		if (address == MAP_FAILED) {
+			return 0;
+		}
+		pTex->m_memory = address;
+
+		memcpy( address, pixels, width * height * sizeof(uint32_t) );
+	}
+
+	memcpy( pUploadBuffer, pixels, width * height * sizeof(uint32_t) );
+
+	VkCommandBuffer commandBuffer;
+	uint32_t handle = get_command_buffer( commandBuffer, nullptr );
+
+	VkBufferImageCopy region = {};
+
+	region.imageSubresource = {
+		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+		.layerCount = 1
+	};
+
+	region.imageExtent = {
+		.width = width,
+		.height = height,
+		.depth = 1
+	};
+
+	vkCmdCopyBufferToImage( commandBuffer, uploadBuffer, pTex->m_vkImage,
+							VK_IMAGE_LAYOUT_GENERAL, 1, &region );
+
+	std::vector<CVulkanTexture *> refs;
+	refs.push_back( pTex );
+
+	submit_command_buffer( handle, refs );
+
+	ret = ++g_nMaxVulkanTexHandle;
+	g_mapVulkanTextures[ ret ] = pTex;
+
+	pTex->handle = ret;
+
 	return ret;
 }
 

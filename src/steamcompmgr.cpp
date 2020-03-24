@@ -562,6 +562,7 @@ MouseCursor::MouseCursor(_XDisplay *display)
 	, m_imageEmpty(false)
 	, m_hideForMovement(true)
 	, m_hasPlane(false)
+	, m_fbId(0)
 	, m_display(display)
 {
 }
@@ -767,8 +768,8 @@ bool MouseCursor::getTexture()
 		return false;
 	}
 
-	m_texture = vulkan_create_texture_from_bits(m_width, m_height, VK_FORMAT_R8G8B8A8_UNORM,
-												cursorDataBuffer);
+	m_texture = vulkan_create_cursor_texture(m_width, m_height, cursorDataBuffer,
+											 g_bDumbDrmCursor ? &m_fbId : nullptr);
 	assert(m_texture);
 	XFree(image);
 	m_dirty = false;
@@ -834,7 +835,7 @@ void MouseCursor::paint(win *window, struct Composite_t *pComposite,
 
 	pPipeline->layerBindings[ curLayer ].tex = m_texture;
 	pPipeline->layerBindings[ curLayer ].fbid = BIsNested() ? 0 :
-															  vulkan_texture_get_fbid(m_texture);
+											m_fbId ? m_fbId : vulkan_texture_get_fbid(m_texture);
 
 	pPipeline->layerBindings[ curLayer ].bFilter = false;
 	pPipeline->layerBindings[ curLayer ].bBlackBorder = false;

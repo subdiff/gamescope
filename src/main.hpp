@@ -21,6 +21,8 @@ extern int g_nNestedWidth;
 extern int g_nNestedHeight;
 extern int g_nNestedRefresh;
 
+extern bool g_bDumbDrmCursor;
+
 extern uint32_t g_nOutputWidth;
 extern uint32_t g_nOutputHeight;
 extern int g_nOutputRefresh;

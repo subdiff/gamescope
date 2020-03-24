@@ -70,6 +70,7 @@ private:
 	PointerBarrier m_scaledFocusBarriers[4];
 
 	bool m_hasPlane;
+	uint32_t m_fbId;
 
 	_XDisplay *m_display;
 };

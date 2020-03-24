@@ -61,7 +61,7 @@ class CVulkanTexture
 public:
 	bool BInit(uint32_t width, uint32_t height, VkFormat format, bool bFlippable, bool bTextureable, wlr_dmabuf_attributes *pDMA = nullptr );
 	
-	~CVulkanTexture( void );
+	virtual ~CVulkanTexture( void );
 	
 	bool m_bInitialized = false;
 
@@ -80,6 +80,17 @@ public:
 	VulkanTexture_t handle = 0;
 };
 
+class CVulkanCursorTexture : public CVulkanTexture
+{
+public:
+	~CVulkanCursorTexture( void ) override;
+
+	bool BInit(uint32_t width, uint32_t height, bool useDmabufForFlips);
+
+	uint64_t m_memorySize = 0;
+	void *m_memory = nullptr;
+};
+
 extern std::vector< const char * > g_vecSDLInstanceExts;
 
 #endif
@@ -88,6 +99,7 @@ int vulkan_init(void);
 
 VulkanTexture_t vulkan_create_texture_from_dmabuf( struct wlr_dmabuf_attributes *pDMA );
 VulkanTexture_t vulkan_create_texture_from_bits( uint32_t width, uint32_t height, VkFormat format, void *bits );
+VulkanTexture_t vulkan_create_cursor_texture(uint32_t width, uint32_t height, uint32_t *pixels , uint32_t *fbid);
 
 uint32_t vulkan_get_texture_fence( VulkanTexture_t vulkanTex );
 void vulkan_wait_for_fence( uint32_t );
