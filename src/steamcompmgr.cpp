@@ -723,9 +723,6 @@ bool MouseCursor::getTexture()
 	m_hotspotX = image->xhot;
 	m_hotspotY = image->yhot;
 
-	m_width = image->width;
-	m_height = image->height;
-
 	if (m_texture) {
 		vulkan_free_texture(m_texture);
 		m_texture = 0;
@@ -734,12 +731,27 @@ bool MouseCursor::getTexture()
 	// Assume the cursor is fully translucent unless proven otherwise.
 	bool bNoCursor = true;
 
-	unsigned int cursorDataBuffer[m_width * m_height];
-	for (int i = 0; i < m_width * m_height; i++) {
-		cursorDataBuffer[i] = image->pixels[i];
+	m_width = image->width;
+	m_height = image->height;
 
-		if ( cursorDataBuffer[i] & 0x000000ff ) {
-			bNoCursor = false;
+	if ( BIsNested() == false && alwaysComposite == False )
+	{
+		m_width = g_DRM.cursor_width;
+		m_height = g_DRM.cursor_height;
+	}
+
+	uint32_t cursorDataBuffer[m_width * m_height] = {0};
+
+	for (int i = 0; i < image->height; i++)
+	{
+		for (int j = 0; j < image->width; j++)
+		{
+			cursorDataBuffer[i * m_width + j] = image->pixels[i * image->width + j];
+
+			if ( cursorDataBuffer[i * m_width + j] & 0x000000ff )
+			{
+				bNoCursor = false;
+			}
 		}
 	}
 
