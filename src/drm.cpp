@@ -474,7 +474,7 @@ int init_drm(struct drm_t *drm, const char *device, const char *mode_str, unsign
 		drm->lo_layers[ i ] = liftoff_layer_create( drm->lo_output );
 		assert( drm->lo_layers[ i ] );
 	}
-	
+	liftoff_output_set_composition_layer(drm->lo_output, drm->lo_layers[ 0 ]);
 	drm->flipcount = 0;
 	
 	return 0;
