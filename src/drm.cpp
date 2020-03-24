@@ -712,7 +712,10 @@ bool drm_can_avoid_composite( struct drm_t *drm, struct Composite_t *pComposite,
 				drm->fbids_in_req.push_back( pPipeline->layerBindings[ i ].fbid );
 
 				liftoff_layer_set_property( drm->lo_layers[ i ], "zpos", pPipeline->layerBindings[ i ].zpos );
-				liftoff_layer_set_property( drm->lo_layers[ i ], "alpha", pComposite->layers[ i ].flOpacity * 0xffff);
+
+				if (pComposite->layers[ i ].flOpacity < 1.) {
+					liftoff_layer_set_property( drm->lo_layers[ i ], "alpha", pComposite->layers[ i ].flOpacity * 0xffff);
+				}
 
 				if ( pPipeline->layerBindings[ i ].zpos == 0 )
 				{
